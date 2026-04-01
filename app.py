@@ -1,3 +1,4 @@
+# app.py
 from flask import Flask, render_template, request
 import numpy as np
 import cv2
@@ -15,6 +16,7 @@ app = Flask(__name__)
 MODEL_PATH = "vgg16_best.h5"
 MODEL_URL = "https://drive.google.com/uc?id=1sq-Cz_Jvtyns3bxx8_kqdt8dfZDInZMr"
 
+# Download model if not exists
 if not os.path.exists(MODEL_PATH):
     print("Downloading model...")
     gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
@@ -38,33 +40,25 @@ def get_gradcam(img_array):
 
     with tf.GradientTape() as tape:
         conv_outputs, predictions = grad_model(img_array)
-
         if isinstance(predictions, list):
             predictions = predictions[0]
-
         pred_index = tf.argmax(predictions[0])
         loss = predictions[:, pred_index]
 
     grads = tape.gradient(loss, conv_outputs)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-
+    pooled_grads = tf.reduce_mean(grads, axis=(0,1,2))
     conv_outputs = conv_outputs[0]
     heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
-
     heatmap = tf.maximum(heatmap, 0)
     heatmap = heatmap / (tf.reduce_max(heatmap) + 1e-10)
-
     return heatmap.numpy()
 
 # ------------------ STAGE CALCULATION ------------------
 def calculate_stage(heatmap):
     heatmap = heatmap / (np.max(heatmap) + 1e-8)
-
     tumor_pixels = np.sum(heatmap > 0.5)
     total_pixels = heatmap.size
-
     coverage = (tumor_pixels / total_pixels) * 100
-
     if coverage <= 10:
         stage = "Stage I"
     elif coverage <= 25:
@@ -73,11 +67,9 @@ def calculate_stage(heatmap):
         stage = "Stage III"
     else:
         stage = "Stage IV"
-
     return round(coverage, 2), stage
 
 # ------------------ ROUTES ------------------
-
 @app.route('/')
 def home():
     return render_template('welcome.html')
@@ -88,69 +80,63 @@ def analyze():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    file = request.files['scan']
+    try:
+        file = request.files['scan']
+        patient_name = request.form.get('patient_name')
+        age = request.form.get('age')
+        gender = request.form.get('gender')
+        smoking = request.form.get('smoking')
 
-    patient_name = request.form.get('patient_name')
-    age = request.form.get('age')
-    gender = request.form.get('gender')
-    smoking = request.form.get('smoking')
+        # ---------- Image processing ----------
+        img_bytes = file.read()
+        img = image.load_img(BytesIO(img_bytes), target_size=(224,224))
+        arr = image.img_to_array(img) / 255.0
+        arr = np.expand_dims(arr, axis=0)
 
-    # ---------- Image processing ----------
-    img_bytes = file.read()
-    img = image.load_img(BytesIO(img_bytes), target_size=(224,224))
-    arr = image.img_to_array(img) / 255.0
-    arr = np.expand_dims(arr, axis=0)
+        # ---------- Prediction ----------
+        preds = model.predict(arr)[0]
+        idx = np.argmax(preds)
+        label = class_labels[idx]
+        confidence = float(np.max(preds) * 100)
 
-    # ---------- Prediction ----------
-    preds = model.predict(arr)[0]
-    idx = np.argmax(preds)
+        confidences = {class_labels[i]: float(preds[i]) for i in range(len(class_labels))}
 
-    label = class_labels[idx]
-    confidence = float(np.max(preds) * 100)
+        # ---------- Grad-CAM ----------
+        heatmap = get_gradcam(arr)
 
-    # Class-wise confidence
-    confidences = {
-        class_labels[i]: float(preds[i])
-        for i in range(len(class_labels))
-    }
+        orig = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        heatmap_resized = cv2.resize(heatmap, (orig.shape[1], orig.shape[0]))
 
-    # ---------- Grad-CAM ----------
-    heatmap = get_gradcam(arr)
+        coverage, stage = calculate_stage(heatmap_resized)
 
-    orig = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-    heatmap = cv2.resize(heatmap, (orig.shape[1], orig.shape[0]))
+        heatmap_uint8 = np.uint8(255 * heatmap_resized)
+        heatmap_color = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
+        superimposed = cv2.addWeighted(orig, 0.6, heatmap_color, 0.4, 0)
 
-    # ✅ Calculate stage BEFORE modifying heatmap
-    coverage, stage = calculate_stage(heatmap)
+        # ---------- Convert to base64 ----------
+        _, orig_buf = cv2.imencode('.png', orig)
+        _, heat_buf = cv2.imencode('.png', superimposed)
+        original_base64 = base64.b64encode(orig_buf).decode('utf-8')
+        gradcam_base64 = base64.b64encode(heat_buf).decode('utf-8')
 
-    # ---------- Visualization ----------
-    heatmap_uint8 = np.uint8(255 * heatmap)
-    heatmap_color = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
-    superimposed = cv2.addWeighted(orig, 0.6, heatmap_color, 0.4, 0)
+        return render_template('results.html',
+            prediction=label,
+            confidence=f"{confidence:.2f}%",
+            original=original_base64,
+            gradcam=gradcam_base64,
+            patient_name=patient_name,
+            age=age,
+            gender=gender,
+            smoking=smoking,
+            confidences=confidences,
+            coverage=f"{coverage}%",
+            stage=stage
+        )
 
-    # ---------- Convert to base64 ----------
-    _, orig_buf = cv2.imencode('.png', orig)
-    _, heat_buf = cv2.imencode('.png', superimposed)
-
-    original_base64 = base64.b64encode(orig_buf).decode('utf-8')
-    gradcam_base64 = base64.b64encode(heat_buf).decode('utf-8')
-
-    # ---------- Send to UI ----------
-    return render_template('results.html',
-        prediction=label,
-        confidence=f"{confidence:.2f}%",
-        original=original_base64,
-        gradcam=gradcam_base64,
-        patient_name=patient_name,
-        age=age,
-        gender=gender,
-        smoking=smoking,
-        confidences=confidences,
-        coverage=f"{coverage}%",
-        stage=stage
-    )
+    except Exception as e:
+        return f"Error: {str(e)}", 500
 
 # ------------------ RUN ------------------
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 10000))  # Use Render's dynamic port
     app.run(host='0.0.0.0', port=port)
