@@ -16,13 +16,14 @@ app = Flask(__name__)
 MODEL_PATH = "vgg16_best.h5"
 MODEL_URL = "https://drive.google.com/uc?id=1sq-Cz_Jvtyns3bxx8_kqdt8dfZDInZMr"
 
-# Download model if not exists
-if not os.path.exists(MODEL_PATH):
-    print("Downloading model...")
-    gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
+def load_my_model():
+    if not os.path.exists(MODEL_PATH):
+        print("Downloading model ONCE...")
+        gdown.download(MODEL_URL, MODEL_PATH, quiet=False, fuzzy=True)
+    print("Loading model...")
+    return load_model(MODEL_PATH)
 
-print("Loading model...")
-model = load_model(MODEL_PATH)
+model = load_my_model()
 
 class_labels = [
     'adenocarcinoma',
@@ -48,17 +49,21 @@ def get_gradcam(img_array):
     grads = tape.gradient(loss, conv_outputs)
     pooled_grads = tf.reduce_mean(grads, axis=(0,1,2))
     conv_outputs = conv_outputs[0]
+
     heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
     heatmap = tf.maximum(heatmap, 0)
     heatmap = heatmap / (tf.reduce_max(heatmap) + 1e-10)
+
     return heatmap.numpy()
 
 # ------------------ STAGE CALCULATION ------------------
 def calculate_stage(heatmap):
     heatmap = heatmap / (np.max(heatmap) + 1e-8)
+
     tumor_pixels = np.sum(heatmap > 0.5)
     total_pixels = heatmap.size
     coverage = (tumor_pixels / total_pixels) * 100
+
     if coverage <= 10:
         stage = "Stage I"
     elif coverage <= 25:
@@ -67,6 +72,7 @@ def calculate_stage(heatmap):
         stage = "Stage III"
     else:
         stage = "Stage IV"
+
     return round(coverage, 2), stage
 
 # ------------------ ROUTES ------------------
@@ -82,6 +88,7 @@ def analyze():
 def predict():
     try:
         file = request.files['scan']
+
         patient_name = request.form.get('patient_name')
         age = request.form.get('age')
         gender = request.form.get('gender')
@@ -96,10 +103,14 @@ def predict():
         # ---------- Prediction ----------
         preds = model.predict(arr)[0]
         idx = np.argmax(preds)
+
         label = class_labels[idx]
         confidence = float(np.max(preds) * 100)
 
-        confidences = {class_labels[i]: float(preds[i]) for i in range(len(class_labels))}
+        confidences = {
+            class_labels[i]: float(preds[i])
+            for i in range(len(class_labels))
+        }
 
         # ---------- Grad-CAM ----------
         heatmap = get_gradcam(arr)
@@ -107,8 +118,10 @@ def predict():
         orig = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
         heatmap_resized = cv2.resize(heatmap, (orig.shape[1], orig.shape[0]))
 
+        # Stage calculation
         coverage, stage = calculate_stage(heatmap_resized)
 
+        # ---------- Visualization ----------
         heatmap_uint8 = np.uint8(255 * heatmap_resized)
         heatmap_color = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
         superimposed = cv2.addWeighted(orig, 0.6, heatmap_color, 0.4, 0)
@@ -116,10 +129,12 @@ def predict():
         # ---------- Convert to base64 ----------
         _, orig_buf = cv2.imencode('.png', orig)
         _, heat_buf = cv2.imencode('.png', superimposed)
+
         original_base64 = base64.b64encode(orig_buf).decode('utf-8')
         gradcam_base64 = base64.b64encode(heat_buf).decode('utf-8')
 
-        return render_template('results.html',
+        return render_template(
+            'results.html',
             prediction=label,
             confidence=f"{confidence:.2f}%",
             original=original_base64,
@@ -138,5 +153,5 @@ def predict():
 
 # ------------------ RUN ------------------
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))  # Use Render's dynamic port
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
