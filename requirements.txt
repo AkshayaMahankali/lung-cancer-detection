@@ -1,0 +1,10 @@
+Flask
+numpy
+opencv-python-headless
+tensorflow
+keras
+gdown
+psycopg2-binary
+cloudinary
+Pillow
+gunicorn
