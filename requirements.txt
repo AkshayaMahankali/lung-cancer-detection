@@ -1,8 +1,8 @@
 Flask
-numpy
+numpy==1.23.5
 opencv-python-headless
-tensorflow
-keras
+tensorflow==2.9.3
+keras==2.9.0
 gdown
 psycopg2-binary
 cloudinary
