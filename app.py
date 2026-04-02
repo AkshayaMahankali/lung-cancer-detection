@@ -12,8 +12,14 @@ import base64
 app = Flask(__name__)
 
 # ------------------ MODEL ------------------
-MODEL_PATH = "vgg16_best.h5"
-model = load_model(MODEL_PATH)
+model = None
+
+def get_model():
+    global model
+    if model is None:
+        print("Loading model...")
+        model = load_model(MODEL_PATH)
+    return model
 
 def load_my_model():
     if not os.path.exists(MODEL_PATH):
@@ -100,6 +106,7 @@ def predict():
         arr = np.expand_dims(arr, axis=0)
 
         # ---------- Prediction ----------
+        model = get_model()
         preds = model.predict(arr)[0]
         idx = np.argmax(preds)
 
