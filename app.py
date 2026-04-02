@@ -8,13 +8,12 @@ from io import BytesIO
 import os
 import tensorflow as tf
 import base64
-import gdown
 
 app = Flask(__name__)
 
 # ------------------ MODEL ------------------
 MODEL_PATH = "vgg16_best.h5"
-MODEL_URL = "https://drive.google.com/uc?id=1sq-Cz_Jvtyns3bxx8_kqdt8dfZDInZMr"
+model = load_model(MODEL_PATH)
 
 def load_my_model():
     if not os.path.exists(MODEL_PATH):
