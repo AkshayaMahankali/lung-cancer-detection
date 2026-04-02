@@ -77,7 +77,7 @@ def calculate_stage(heatmap):
 # ------------------ ROUTES ------------------
 @app.route('/')
 def home():
-    return render_template('welcome.html')
+    return "Working"
 
 @app.route('/analyze')
 def analyze():
